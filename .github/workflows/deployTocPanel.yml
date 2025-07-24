@@ -1,0 +1,124 @@
+name: Production Deployment
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      logLevel:
+        description: "Log level"
+        required: true
+        default: "warning"
+        type: choice
+        options:
+          - info
+          - warning
+          - debug
+
+jobs:
+  deploy:
+    name: Deploy Application
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      NODE_VERSION: 20
+      FTP_SERVER: 0.0.0.0
+      FTP_USERNAME: example
+      BUILD_DIR: ./
+
+    steps:
+      - name: 🚚 Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # - name: 🛠️ Setup Node.js 20
+      #   uses: actions/setup-node@v3
+      #   with:
+      #     node-version: ${{env.NODE_VERSION}}
+      #     cache: 'npm'
+      #     cache-dependency-path: 'package-lock.json'
+
+      # - name: 📦 Install dependencies
+      #   run: npm ci --prefer-offline --no-audit --include=dev
+      #   env:
+      #     CI: true
+
+      # - name: 🔨 Build project
+      #   run: npm run build
+      #   env:
+      #     NODE_OPTIONS: --max_old_space_size=4096
+
+      - name: 📤 Deploy via FTP
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ env.FTP_SERVER }}
+          username: ${{ env.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          server-dir: ./
+          # local-dir: ${{ env.BUILD_DIR }}/
+          log-level: ${{ github.event.inputs.logLevel || 'standard' }}
+          dry-run: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.logLevel == 'debug' }}
+          exclude: |
+            **/*.map
+            **/*.log
+            **/test*
+            **/.git*
+            **/.git*/**
+            **/.github/**
+            **/.vscode/**
+            **/node_modules/**
+            **/tests/**
+            **/vendor/**
+            **/*.md
+            **/*.lock
+
+      - name: 🏷️ Create version tag
+        id: tag-version
+        run: |
+          if git diff --cached --quiet; then
+            echo "version=N/A" >> $GITHUB_OUTPUT
+            echo "No changes to tag."
+          else
+            VERSION=$(date +"%Y.%m.%d-%H%M%S")
+            echo "version=$VERSION" >> $GITHUB_OUTPUT
+            git tag "deploy-$VERSION"
+            git push origin "deploy-$VERSION"
+          fi
+                     
+      # - name: 📝 Deployment summary
+      #   uses: actions/github-script@v6
+      #   if: always()
+      #   env:
+      #     VERSION: ${{ steps.tag-version.outputs.version }}
+      #   with:
+      #     script: |
+      #       const { FTP_SERVER, BUILD_DIR, NODE_VERSION, VERSION } = process.env
+      #       const fs = require('fs')
+      #       try {
+      #         const files = fs.readdirSync(BUILD_DIR)
+              
+      #         await github.rest.issues.createComment({
+      #           owner: context.repo.owner,
+      #           repo: context.repo.repo,
+      #           issue_number: context.issue.number,
+      #           body: `### 🚀 Deployment Complete\n` +
+      #                 `- **Server**: ${FTP_SERVER}\n` +
+      #                 `- **Version**: ${VERSION || 'N/A'}\n` +
+      #                 `- **Files Deployed**: ${files.length}\n` +
+      #                 `- **Node**: ${NODE_VERSION}\n` +
+      #                 `\nBuild directory contents:\n\`\`\`\n${files.join('\n')}\n\`\`\``
+      #         })
+      #       } catch (error) {
+      #         core.error('Failed to create deployment summary: ' + error.message)
+      #       }
+
+      - name: 🗑️ Clean unnecessary files
+        run: |
+          rm -rf node_modules/
+          rm -rf .git/
+          rm -rf .github/
+          rm -rf .vscode/
+          find . -name "*.md" -delete
